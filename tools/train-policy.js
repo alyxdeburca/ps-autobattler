@@ -38,10 +38,12 @@ async function collect(games) {
 		const streams = getPlayerStreams(stream);
 		const done = new Promise(res => {
 			void (async () => {
-				for await (const chunk of streams.omniscient) {
-					const s = String(chunk);
-					if (s.includes('|win|') || s.includes('|tie|')) stream.destroy();
-				}
+				try {
+					for await (const chunk of streams.omniscient) {
+						const s = String(chunk);
+						if (s.includes('|win|') || s.includes('|tie|')) break;
+					}
+				} catch (e) { /* stream torn down with the process loop */ }
 				res();
 			})();
 		});
