@@ -160,6 +160,50 @@ function hpRatioOf(condition) {
 	return c.maxHP ? c.curHP / c.maxHP : 0;
 }
 
+/**
+ * Turns-to-KO math: is a boost worth a turn?
+ *
+ * planA = attack N times (current power)
+ * planB = boost once, then attack M times (boosted power)
+ * Setup only pays if M + 1 < N -- i.e. it strictly saves a turn.
+ */
+function evaluateSetupTurns({ dmgNow, foeHpPct, boosts, bestDmg, selfHpRatio }) {
+	// How many hits to KO at current power? (expected damage per hit)
+	if (!dmgNow || dmgNow <= 0) return { worthIt: false, planA: Infinity, planB: Infinity };
+	const hitsA = Math.ceil(foeHpPct / Math.max(dmgNow, 1));
+
+	// Boosted per-hit estimate: apply the stage multiplier to the damage.
+	let stage = 0;
+	for (const [stat, delta] of Object.entries(boosts || {})) {
+		if (stat === 'atk' || stat === 'spa') {
+			// Use whichever the set actually boosts most (SD=+2 atk, CM=+1 spa...)
+			stage = Math.max(stage, delta);
+		}
+	}
+	if (!stage) return { worthIt: false, planA: hitsA, planB: Infinity };
+
+	const mult = stage >= 0 ? (2 + stage) / 2 : 2 / (2 - stage);
+	const dmgBoosted = dmgNow * mult;
+	const hitsB = Math.ceil(Math.max(foeHpPct - 0, 1) / Math.max(dmgBoosted, 1));
+	const planB = hitsB + 1; // +1 for the boost turn itself
+
+	const saves = hitsA - planB;
+	// Only worthwhile if it strictly saves a full turn of tempo.
+	const worthIt = saves >= 1;
+
+	// Score scale: saving 2+ turns is great, exactly 1 is modest,
+	// saving nothing is penalized relative to just attacking.
+	let score;
+	if (!worthIt) score = -(6 * (planB - hitsA));      // net loss of tempo
+	else score = Math.min(SCORES.STATUP_SELF * 1.5, SCORES.STATUP_SELF * saves);
+
+	// Never set up into a likely KO range or while frail.
+	if (bestDmg >= (foeHpPct)) score = Math.min(score, 1);
+	if (selfHpRatio < 0.45) score *= 0.5;
+
+	return { worthIt, planA: hitsA, planB, score };
+}
+
 /** Pick the best bench slot among candidateSlots given the request side data. */
 function bestSwitchSlot(request, candidateSlots, foeView) {
 	let best = candidateSlots[0];
@@ -345,7 +389,19 @@ function decideMove(tracker, request) {
 		else if (dmg < 15 && mv.category === 'Status') score -= 5;
 
 		if (mv.category === 'Status') {
-			score = scoreStatusMove(mv, ctx);
+			if (mv.boosts && ((mv.boosts.atk || 0) > 0 || (mv.boosts.spa || 0) > 0)) {
+				// Turns-to-KO test: boosting only pays when
+				// [boost + M hits] beats [N hits at current power].
+				score = evaluateSetupTurns({
+					dmgNow: ctx.bestDmg,
+					foeHpPct: foeView ? (foeView.hpRatio || 1) * 100 : 100,
+					boosts: mv.boosts,
+					bestDmg: ctx.bestDmg,
+					selfHpRatio: ctx.selfHpRatio,
+				}).score;
+			} else {
+				score = scoreStatusMove(mv, ctx);
+			}
 			// ANY status/utility move decays on repeat (Haze x3 taught us
 			// this); setup/heal additionally hard-cap via streak.
 			const isSetup = /raise/.test(`${mv.shortDesc || ''}`.toLowerCase());
