@@ -107,6 +107,13 @@ function estimateDamagePct({ attacker, defender, move, attackerStats, defenderSp
 
 	if (isPhysical && attacker.status === 'brn') A *= STATUS_MULTIPLIERS.brn;
 
+	// Stat stages (boosts/unboosts), e.g. from Calm Mind / Swords Dance.
+	const stageMult = s => s >= 0 ? (2 + s) / 2 : 2 / (2 - s);
+	const aBoosts = (attacker && attacker.boosts) || {};
+	const dBoosts = (defender && defender.boosts) || {};
+	A *= stageMult(aBoosts[isPhysical ? 'atk' : 'spa'] || 0);
+	D *= stageMult(dBoosts[isPhysical ? 'def' : 'spd'] || 0);
+
 	const level = attacker.level || 100;
 	let power = move.basePower;
 

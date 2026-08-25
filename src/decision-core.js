@@ -39,8 +39,20 @@ const SCORES = {
 
 /** Per-battle AI memory hung off the tracker instance. */
 function aiMem(tracker) {
-	if (!tracker._aiMem) tracker._aiMem = { switchHistory: [] };
+	if (!tracker._aiMem) {
+		tracker._aiMem = { switchHistory: [], statusUse: new Map(), setupStreak: 0 };
+	}
 	return tracker._aiMem;
+}
+
+/**
+ * Diminishing returns for repeating the same status move: each consecutive
+ * use halves the value (healing/setup loops are how bots lose).
+ */
+function repetitionFactor(mem, moveId, isSetupOrHeal) {
+	if (!isSetupOrHeal) return 1;
+	const n = mem.statusUse.get(moveId) || 0;
+	return Math.pow(0.5, n);
 }
 
 /** Value of bringing `monView` in against the current active foe. */
@@ -221,6 +233,7 @@ function decideMove(tracker, request) {
 		types: myTypes,
 		status: trackerMod.parseCondition(activePd.condition).status,
 		item: activePd.item || '',
+		boosts: (tracker._selfBoosts) || {},
 	};
 	const defenderSpecies = foeView ? dex.speciesFromId(foeView.species) : null;
 
@@ -246,6 +259,7 @@ function decideMove(tracker, request) {
 		seenFoes: tracker.foe ? tracker.foe.filter(f => f && !f.fainted).length : 0,
 	};
 	const teraType = meActive.canTerastallize || '';
+	const mem = aiMem(tracker);
 
 	const candidates = [];
 
@@ -266,6 +280,15 @@ function decideMove(tracker, request) {
 
 		if (mv.category === 'Status') {
 			score = scoreStatusMove(mv, ctx);
+			// Setup/heal loops die here: each repeat halves the score, and
+			// a long setup streak is hard-capped.
+			const isSetup = /raise/.test(`${mv.shortDesc || ''}`.toLowerCase());
+			const isHeal = /heal/.test(`${mv.shortDesc || ''}`.toLowerCase());
+			if (isSetup || isHeal) {
+				score *= repetitionFactor(mem, md.id, true);
+				if (isSetup && mem.setupStreak >= 2) score = Math.min(score, 1);
+				if (score <= ctx.bestDmg) score = Math.min(score, ctx.bestDmg * 0.6);
+			}
 		}
 		if (mv.secondary && mv.secondary.status && foeView &&
 			!foeView.status && dmg > 0) {
@@ -286,8 +309,6 @@ function decideMove(tracker, request) {
 			let tScore = dmgT;
 			if (dmgT >= 100) tScore += SCORES.OHKO;
 			else if (foeView && dmgT >= (foeView.hpRatio || 1) * 100) tScore += 30;
-			// One-time resource: must beat the non-tera version by a margin
-			// (or turn a 2HKO into a KO).
 			const enablesKo = dmgT >= 100 && dmg < 100;
 			if (!enablesKo && tScore <= score + SCORES.TERA_MARGIN) tScore = -1;
 			candidates.push({
@@ -299,7 +320,6 @@ function decideMove(tracker, request) {
 
 	// --- switch --------------------------------------------------------
 	const trapped = meActive.trapped || meActive.maybeTrapped;
-	const mem = aiMem(tracker);
 	const activeSlot = side.pokemon.findIndex(p => p.active) + 1;
 	if (!trapped) {
 		const benchSlots = [];
@@ -356,6 +376,16 @@ function decideMove(tracker, request) {
 	if (best && best.kind === 'switch') {
 		mem.switchHistory.push({ from: activeSlot, to: best.slot, turn: tracker.turn });
 		if (mem.switchHistory.length > 8) mem.switchHistory.shift();
+	}
+
+	// Update status/setup memory for repetition damping + streak caps.
+	if (best && best.kind === 'move') {
+		const isSetup = /raise/.test(`${(dex.moveFromId(best.id) || {}).shortDesc || ''}`.toLowerCase());
+		const isHeal = /heal/.test(`${(dex.moveFromId(best.id) || {}).shortDesc || ''}`.toLowerCase());
+		if (isSetup || isHeal) mem.statusUse.set(best.id, (mem.statusUse.get(best.id) || 0) + 1);
+		mem.setupStreak = isSetup ? mem.setupStreak + 1 : 0;
+	} else if (best) {
+		mem.setupStreak = 0;
 	}
 
 	const choice = !best ? 'default'
