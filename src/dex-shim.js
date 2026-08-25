@@ -12,13 +12,32 @@
 
 let moddedDex = null;
 
+/** Resolve a Dex-like backend for the current environment.
+ *  - Node: load the sibling compiled simulator.
+ *  - Browser/extension content script: use `window.__PS_DEX_BACKEND__`,
+ *    injected by the extension bridge from the live Showdown client's own
+ *    Dex -- no bundled engine needed on the page.
+ */
+function resolveBackend(formatid) {
+	const isNode = typeof process !== 'undefined' &&
+		!!process.versions && !!process.versions.node;
+	if (isNode) {
+		return require('../../pokemon-showdown/dist/sim/index').Dex.forFormat(formatid);
+	}
+	const injected = (typeof window !== 'undefined') && window.__PS_DEX_BACKEND__;
+	if (!injected) {
+		throw new Error('No Dex backend: expected window.__PS_DEX_BACKEND__ ' +
+			'(injected by the extension bridge from the Showdown client)');
+	}
+	return injected;
+}
+
 /** Initialize (once) a format-aware Dex. Safe to call repeatedly. */
 function init(formatid = 'gen9randombattle') {
 	if (moddedDex) return moddedDex;
-	const { Dex } = require('../../pokemon-showdown/dist/sim/index');
-	moddedDex = Dex.forFormat(formatid);
+	moddedDex = resolveBackend(formatid);
 	try {
-		moddedDex.includeModData();
+		if (typeof moddedDex.includeModData === 'function') moddedDex.includeModData();
 	} catch (e) {
 		// Non-critical: base data still works for most formats.
 	}
