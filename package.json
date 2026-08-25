@@ -8,5 +8,8 @@
     "battle": "node src/battle-runner.js",
     "benchmark": "node src/battle-runner.js --games 20 --format gen9randombattle --p2 random"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "convnetjs": "^0.3.0"
+  }
 }

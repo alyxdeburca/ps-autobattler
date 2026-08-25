@@ -269,8 +269,17 @@ class BattleTracker {
 			break;
 		}
 		case '-sidestart': {
-			// hazards on a side: |-sidestart|p2: side|Stealth Rock
-			break; // hazard tracking is a future refinement
+			// |-sidestart|p2: side|Stealth Rock  (or move:"Stealth Rock")
+			if (!this._sideHazards) this._sideHazards = {};
+			const targetSide = (parts[1] || '').split(':')[0].trim();
+			this._sideHazards[targetSide] =
+				(this._sideHazards[targetSide] || 0) + 1;
+			break;
+		}
+		case '-sideend': {
+			if (!this._sideHazards) this._sideHazards = {};
+			delete this._sideHazards[(parts[1] || '').split(':')[0].trim()];
+			break;
 		}
 		default:
 			break;

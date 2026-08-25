@@ -146,6 +146,7 @@ function scoreStatusMove(mv, ctx) {
 
 	if (/(stealth rock|spikes|toxic spikes|sticky web)/.test(desc)) {
 		if (ctx.canKoNow) return 1;
+		if (ctx.hazardsUp) return 0.5; // already set -- clicking again fails
 		return ctx.seenFoes <= 2 ? 4 : SCORES.HAZARD;
 	}
 
@@ -257,6 +258,7 @@ function decideMove(tracker, request) {
 		canKoNow: foeView ? bestDmgPct >= 100 : false,
 		twoHitKo: foeView ? bestDmgPct >= (foeView.hpRatio || 1) * 50 : false,
 		seenFoes: tracker.foe ? tracker.foe.filter(f => f && !f.fainted).length : 0,
+		hazardsUp: !!tracker._foeHazards,
 	};
 	const teraType = meActive.canTerastallize || '';
 	const mem = aiMem(tracker);
