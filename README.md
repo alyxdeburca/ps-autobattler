@@ -51,7 +51,17 @@ const result = await runBattle({ formatid: 'gen9randombattle', p2: 'random' });
 
 - [x] Protocol tracking (switches, HP/status changes, moves, items, abilities,
       Tera, weather/terrain)
-- [x] Damage estimation & legal-choice enumeration
-- [x] Heuristic decision loop vs. random baseline
+- [x] Damage estimation & legal-choice enumeration (type chart immunities,
+      STAB, burn, accuracy, multi-hit averaging)
+- [x] Heuristic decision loop with switch scoring and safe fallbacks
 - [ ] Deeper play: hazard tracking, prediction, pivot logic
 - [ ] Chrome extension packaging (deliberately deferred until requested)
+
+### Measured results (gen9randombattle)
+
+| matchup                        | result        |
+|--------------------------------|---------------|
+| heuristic vs. RandomPlayerAI   | **69–31** (100 games), ~240ms/battle |
+| heuristic vs. RandomPlayerAI   | 15–5 (gen8randombattle, 20 games) |
+| heuristic vs. heuristic        | 6–4 (mirror sanity check) |
+
