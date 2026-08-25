@@ -33,6 +33,8 @@ const SCORES = {
 	/** Penalty for flipping back to a slot we recently switched away from. */
 	FLIP_PENALTY: 12,
 	FLIP_WINDOW_TURNS: 2,
+	/** Tera must beat the non-tera version of the same move by this much. */
+	TERA_MARGIN: 25,
 };
 
 /** Per-battle AI memory hung off the tracker instance. */
@@ -72,24 +74,72 @@ function matchupScore(monView, foeView) {
 	return score;
 }
 
-/** Score non-damaging moves by their effect category. */
-function scoreStatusMove(mv, foeView) {
+/** Type-based immunities of common status moves (beyond move-type chart). */
+const STATUS_IMMUNE_TYPES = {
+	thunderwave: ['Ground', 'Electric'],
+	stunspore: ['Ground', 'Electric'],
+	glare: [],
+	toxic: ['Steel', 'Poison'],
+	poisonpowder: ['Steel', 'Poison', 'Grass'],
+	willowisp: ['Fire'],
+};
+
+function statusApplicable(mv, defTypes) {
+	if (!defTypes || !defTypes.length) return true;
+	const blocked = STATUS_IMMUNE_TYPES[mv.id];
+	if (blocked && blocked.some(t => defTypes.includes(t))) return false;
+	// Move-type immunity (TWave=Electric vs Ground, Toxic=Poison vs Steel…)
+	if (dex.isImmune(mv.type, defTypes)) return false;
+	return true;
+}
+
+/**
+ * Score a status move in CONTEXT. Status is an investment: its value is
+ * capped by the damage tempo we give up by clicking it.
+ *
+ * ctx: { foeView, selfHpRatio, bestDmg, canKoNow, twoHitKo, seenFoes }
+ */
+function scoreStatusMove(mv, ctx) {
 	const desc = `${mv.shortDesc || ''}`.toLowerCase();
+	const foeView = ctx.foeView;
+
 	if (/raise.*spa|raise.*atk|raise.*spe|raise.*def/.test(desc) &&
 		!/ally/.test(desc)) {
-		return SCORES.STATUP_SELF;
+		// Setup: worthless if we can KO now, discounted when frail,
+		// endgame, or already hitting like a truck.
+		if (ctx.canKoNow) return 2;
+		let v = SCORES.STATUP_SELF;
+		if (ctx.selfHpRatio < 0.45) v *= 0.4;
+		if (ctx.seenFoes <= 2) v *= 0.6;
+		if (ctx.bestDmg >= 90) v *= 0.3;
+		return v;
 	}
-	if (/heal/.test(desc)) return SCORES.HEAL_SELF;
+
+	if (/heal/.test(desc)) {
+		// Recovery is worth roughly the HP it restores; healthy = wasted turn.
+		if (ctx.selfHpRatio >= 0.72) return 1;
+		return Math.min(34, 50 * (1 - ctx.selfHpRatio));
+	}
+
 	if (/(paralyz|sleep|burn|poison|freeze|toxic)/.test(desc)) {
-		if (foeView && !foeView.status) return SCORES.STATUS_FOE;
-		return 2;
+		if (foeView && foeView.status) return 2;         // already statused
+		if (foeView && !statusApplicable(mv, foeView.types)) return 0.5;
+		if (ctx.canKoNow) return 1;                      // never waste a KO
+		// Cap at ~one turn of our best damage; attacking twice beats fishing
+		// for status when we're close to the KO anyway.
+		let v = Math.min(SCORES.STATUS_FOE, Math.max(6, ctx.bestDmg));
+		if (ctx.twoHitKo) v *= 0.45;
+		return v;
 	}
+
 	if (/(stealth rock|spikes|toxic spikes|sticky web)/.test(desc)) {
-		return SCORES.HAZARD;
+		if (ctx.canKoNow) return 1;
+		return ctx.seenFoes <= 2 ? 4 : SCORES.HAZARD;
 	}
-	if (/(protect|detect|spiky shield)/.test(desc)) return 6;
-	if (/(roar|whirlwind|dragon tail)/.test(desc)) return 3;
-	return 1;
+
+	if (/(protect|detect|spiky shield)/.test(desc)) return 3;
+	if (/(roar|whirlwind|dragon tail)/.test(desc)) return 2;
+	return 1; // generic utility
 }
 
 function hpRatioOf(condition) {
@@ -174,6 +224,29 @@ function decideMove(tracker, request) {
 	};
 	const defenderSpecies = foeView ? dex.speciesFromId(foeView.species) : null;
 
+	// Context for status-move scoring: tempo math.
+	const selfHpRatio = hpRatioOf(activePd.condition);
+	let bestDmgPct = 0;
+	for (const md of meActive.moves) {
+		if (md.disabled) continue;
+		const mv = dex.moveFromId(md.id);
+		if (!mv || mv.category === 'Status') continue;
+		bestDmgPct = Math.max(bestDmgPct, est.expectedDamagePct({
+			attacker, defender: foeView || {}, move: mv,
+			attackerStats: activePd.stats,
+			defenderSpecies,
+		}));
+	}
+	const ctx = {
+		foeView,
+		selfHpRatio,
+		bestDmg: bestDmgPct,
+		canKoNow: foeView ? bestDmgPct >= 100 : false,
+		twoHitKo: foeView ? bestDmgPct >= (foeView.hpRatio || 1) * 50 : false,
+		seenFoes: tracker.foe ? tracker.foe.filter(f => f && !f.fainted).length : 0,
+	};
+	const teraType = meActive.canTerastallize || '';
+
 	const candidates = [];
 
 	// --- moves ---------------------------------------------------------
@@ -192,7 +265,7 @@ function decideMove(tracker, request) {
 		else if (dmg < 15 && mv.category === 'Status') score -= 5;
 
 		if (mv.category === 'Status') {
-			score = scoreStatusMove(mv, foeView);
+			score = scoreStatusMove(mv, ctx);
 		}
 		if (mv.secondary && mv.secondary.status && foeView &&
 			!foeView.status && dmg > 0) {
@@ -201,6 +274,27 @@ function decideMove(tracker, request) {
 		if ((md.pp | 0) === 1) score += SCORES.LOW_PP;
 
 		candidates.push({ kind: 'move', slot: idx + 1, id: md.id, name: mv.name, score, dmg });
+
+		// --- Tera variant: worth spending only if it clearly pays --------
+		if (teraType && mv.category !== 'Status') {
+			const teraAttacker = { ...attacker, teraType, willTera: true };
+			const dmgT = est.expectedDamagePct({
+				attacker: teraAttacker, defender: foeView || {}, move: mv,
+				attackerStats: activePd.stats,
+				defenderSpecies,
+			});
+			let tScore = dmgT;
+			if (dmgT >= 100) tScore += SCORES.OHKO;
+			else if (foeView && dmgT >= (foeView.hpRatio || 1) * 100) tScore += 30;
+			// One-time resource: must beat the non-tera version by a margin
+			// (or turn a 2HKO into a KO).
+			const enablesKo = dmgT >= 100 && dmg < 100;
+			if (!enablesKo && tScore <= score + SCORES.TERA_MARGIN) tScore = -1;
+			candidates.push({
+				kind: 'tera-move', slot: idx + 1, id: md.id,
+				name: `${mv.name} ✦`, score: tScore, dmg: dmgT, teraType,
+			});
+		}
 	});
 
 	// --- switch --------------------------------------------------------
@@ -266,6 +360,7 @@ function decideMove(tracker, request) {
 
 	const choice = !best ? 'default'
 		: best.kind === 'switch' ? `switch ${best.slot}`
+		: best.kind === 'tera-move' ? `move ${best.slot} terastallize`
 		: `move ${best.slot}`;
 	return { choice, candidates, best };
 }
