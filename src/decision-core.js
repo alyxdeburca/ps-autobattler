@@ -26,9 +26,20 @@ const SCORES = {
 	STATUS_FOE: 18,
 	HAZARD: 12,
 	PIVOT_BONUS: 4,
-	SWITCH_IN_PENALTY: 6,
+	SWITCH_IN_PENALTY: 14,
 	LOW_PP: -3,
+	/** Switching must beat the best stay-in move by this margin. */
+	SWITCH_MARGIN: 6,
+	/** Penalty for flipping back to a slot we recently switched away from. */
+	FLIP_PENALTY: 12,
+	FLIP_WINDOW_TURNS: 2,
 };
+
+/** Per-battle AI memory hung off the tracker instance. */
+function aiMem(tracker) {
+	if (!tracker._aiMem) tracker._aiMem = { switchHistory: [] };
+	return tracker._aiMem;
+}
 
 /** Value of bringing `monView` in against the current active foe. */
 function matchupScore(monView, foeView) {
@@ -194,6 +205,8 @@ function decideMove(tracker, request) {
 
 	// --- switch --------------------------------------------------------
 	const trapped = meActive.trapped || meActive.maybeTrapped;
+	const mem = aiMem(tracker);
+	const activeSlot = side.pokemon.findIndex(p => p.active) + 1;
 	if (!trapped) {
 		const benchSlots = [];
 		for (let j = 1; j <= side.pokemon.length; j++) {
@@ -202,21 +215,33 @@ function decideMove(tracker, request) {
 			benchSlots.push(j);
 		}
 		if (benchSlots.length) {
-			const slot = bestSwitchSlot(request, benchSlots, foeView);
-			const pd = side.pokemon[slot - 1];
-			const d = trackerMod.parseDetails(`${pd.details}`);
-			const sp = dex.speciesFromId(d.species);
-			const view = {
-				species: d.species,
-				level: d.level,
-				types: sp ? sp.types : [],
-				moves: pd.moves || [],
-				stats: pd.stats,
-				hpRatio: hpRatioOf(pd.condition),
-			};
-			const swScore = matchupScore(view, foeView) -
-				SCORES.SWITCH_IN_PENALTY + view.hpRatio * 10;
-			candidates.push({ kind: 'switch', slot, id: d.species, name: sp ? sp.name : d.species, score: swScore });
+			for (const slot of benchSlots) {
+				const pd = side.pokemon[slot - 1];
+				const d = trackerMod.parseDetails(`${pd.details}`);
+				const sp = dex.speciesFromId(d.species);
+				const view = {
+					species: d.species,
+					level: d.level,
+					types: sp ? sp.types : [],
+					moves: pd.moves || [],
+					stats: pd.stats,
+					hpRatio: hpRatioOf(pd.condition),
+				};
+				let swScore = matchupScore(view, foeView) -
+					SCORES.SWITCH_IN_PENALTY + view.hpRatio * 10;
+				// Anti-dithering: flipping back to the mon we just switched
+				// away from (within the window) costs extra.
+				const recent = mem.switchHistory[mem.switchHistory.length - 1];
+				const flippedBack = recent &&
+					recent.from === slot &&
+					tracker.turn - recent.turn <= SCORES.FLIP_WINDOW_TURNS;
+				if (flippedBack) swScore -= SCORES.FLIP_PENALTY;
+				candidates.push({
+					kind: 'switch', slot,
+					id: d.species, name: sp ? sp.name : d.species,
+					score: swScore, flippedBack: !!flippedBack,
+				});
+			}
 		}
 	}
 
@@ -224,6 +249,21 @@ function decideMove(tracker, request) {
 	for (const c of candidates) {
 		if ((c.score || 0) > (best.score || 0)) best = c;
 	}
+
+	// Switching must clearly beat staying in; otherwise attack.
+	const moveScores = candidates.filter(c => c.kind === 'move').map(c => c.score);
+	const bestMoveScore = moveScores.length ? Math.max(...moveScores) : -Infinity;
+	if (best && best.kind === 'switch' &&
+		best.score < bestMoveScore + SCORES.SWITCH_MARGIN) {
+		best = candidates.find(c => c.kind === 'move' && c.score === bestMoveScore) || best;
+	}
+
+	// Record voluntary switches so future turns recognize flip-backs.
+	if (best && best.kind === 'switch') {
+		mem.switchHistory.push({ from: activeSlot, to: best.slot, turn: tracker.turn });
+		if (mem.switchHistory.length > 8) mem.switchHistory.shift();
+	}
+
 	const choice = !best ? 'default'
 		: best.kind === 'switch' ? `switch ${best.slot}`
 		: `move ${best.slot}`;
