@@ -11,23 +11,33 @@
 'use strict';
 
 let moddedDex = null;
+let explicitBackend = null;
+
+/** Register a Dex-like backend explicitly (used by the Chrome extension,
+ *  which bundles its own MiniDex). Takes precedence over auto-resolution. */
+function setBackend(backend) {
+	explicitBackend = backend;
+	moddedDex = null; // allow rebinding
+}
 
 /** Resolve a Dex-like backend for the current environment.
- *  - Node: load the sibling compiled simulator.
- *  - Browser/extension content script: use `window.__PS_DEX_BACKEND__`,
- *    injected by the extension bridge from the live Showdown client's own
- *    Dex -- no bundled engine needed on the page.
+ *  1. explicit setBackend() registration
+ *  - Node: load the sibling compiled simulator (via hidden require so
+ *    bundlers like esbuild don't try to follow it).
+ *  - Browser fallback: `window.__PS_DEX_BACKEND__`.
  */
 function resolveBackend(formatid) {
+	if (explicitBackend) return explicitBackend;
 	const isNode = typeof process !== 'undefined' &&
 		!!process.versions && !!process.versions.node;
 	if (isNode) {
-		return require('../../pokemon-showdown/dist/sim/index').Dex.forFormat(formatid);
+		// eslint-disable-next-line no-eval -- hide from static bundlers
+		const req = eval('require');
+		return req('../../pokemon-showdown/dist/sim/index').Dex.forFormat(formatid);
 	}
 	const injected = (typeof window !== 'undefined') && window.__PS_DEX_BACKEND__;
 	if (!injected) {
-		throw new Error('No Dex backend: expected window.__PS_DEX_BACKEND__ ' +
-			'(injected by the extension bridge from the Showdown client)');
+		throw new Error('No Dex backend: call setBackend() or set window.__PS_DEX_BACKEND__');
 	}
 	return injected;
 }
@@ -88,6 +98,7 @@ function isImmune(moveType, defTypes) {
 
 module.exports = {
 	init,
+	setBackend,
 	speciesFromId,
 	moveFromId,
 	itemFromId,
