@@ -84,6 +84,20 @@ class HeuristicPlayerAI extends BattlePlayer {
 		};
 	}
 
+	receiveLine(line) {
+		// Requests go through the normal path (they trigger receiveRequest).
+		// Every OTHER line on our stream (public updates + our sideupdate)
+		// feeds the tracker -- this is how we learn about the foe's team.
+		super.receiveLine(line);
+		if (!line.startsWith('|request|')) {
+			try {
+				this.tracker.seeLine(line);
+			} catch (e) {
+				this.stats.errors.push(`track: ${e && e.message}`);
+			}
+		}
+	}
+
 	receiveError(error) {
 		// Unavailable choices get retried with fresh state; anything else bubbles.
 		if (error.message.startsWith('[Unavailable choice]')) return;

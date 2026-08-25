@@ -58,8 +58,9 @@ function damageFormula(level, power, A, D, mults) {
 	const base = Math.floor(Math.floor(
 		(2 * level / 5 + 2) * power * A / D
 	) / 50) + 2;
-	return base * (mults.stab || 1) * (mults.type || 1) *
-		(mults.burn || 1) * (mults.screen || 1) * (mults.weather || 1);
+	// NOTE: no `|| 1` fallbacks here -- a 0 type multiplier means IMMUNE,
+	// and `0 || 1` would wrongly evaluate to 1.
+	return base * mults.stab * mults.type * mults.burn * mults.screen * mults.weather;
 }
 
 /**

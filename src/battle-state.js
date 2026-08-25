@@ -36,7 +36,7 @@ function parseCondition(cond) {
 	} else {
 		curHP = maxHP = parseInt(hpPart, 10); // percentage-only view (opponent)
 	}
-	return { curHP, maxHP, status: statusPart || '', fnt };
+	return { curHP, maxHP, status: (statusPart || '').toLowerCase(), fnt };
 }
 
 /** Extract the bare pokemon id from "p2a: Garchomp" -> "p2a" plus owner side. */

@@ -125,21 +125,22 @@ ok('estimator: neutral hit lands in a sane range', () => {
 		species: 'garchomp', level: 81,
 		types: dex.speciesFromId('garchomp').types, status: '',
 	};
-	const move = dex.moveFromId('earthquake'); // ground, physical, 100 BP
+	const move = dex.moveFromId('bodyslam'); // normal, physical, 80 BP
+	// Gengar is Ghost-type: immune to Normal moves by typing.
 	const dmg = est.expectedDamagePct({
 		attacker,
-		defender: { types: dex.speciesFromId('rotomwash').types, hpRatio: 1 }, // electric/water immune!
+		defender: { types: dex.speciesFromId('gengar').types, hpRatio: 1 },
 		move,
 		attackerStats: REQUEST.side.pokemon[0].stats,
-		defenderSpecies: dex.speciesFromId('rotomwash'),
+		defenderSpecies: dex.speciesFromId('gengar'),
 	});
-	// Rotom-Wash is levitating electric/water: EQ must be 0.
 	assert.strictEqual(dmg, 0, `expected immunity, got ${dmg}%`);
 
+	const eq = dex.moveFromId('earthquake'); // ground, physical, 100 BP
 	const dmg2 = est.expectedDamagePct({
 		attacker,
 		defender: { types: dex.speciesFromId('garchomp').types, hpRatio: 1 },
-		move,
+		move: eq,
 		attackerStats: REQUEST.side.pokemon[0].stats,
 		defenderSpecies: dex.speciesFromId('garchomp'),
 	});
