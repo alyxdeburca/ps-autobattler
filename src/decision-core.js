@@ -384,6 +384,23 @@ function decideMove(tracker, request) {
 			defenderSpecies,
 		});
 		let score = dmg;
+
+		// BLIND PLAY GUARD: with no foe data, attacks would score 0 and
+		// lose to every status move by default -- the status-spam epidemic.
+		// Assume a neutral-ish baseline so offense stays competitive.
+		const blind = !foeView || !foeView.types || !foeView.types.length;
+
+		// IMMUNITY HARD GATE: never suggest a move the foe's typing nullifies
+		// (e.g. Fighting into Ghost). -100 keeps it below every real option;
+		// it stays visible in the panel marked as immune.
+		if (!blind && est.typeMultiplier(mv.type, foeView.types) === 0) {
+			candidates.push({
+				kind: 'move', slot: idx + 1, id: md.id, name: mv.name,
+				score: -100, dmg: 0, immune: true,
+			});
+			return;
+		}
+
 		if (dmg >= 100) score += SCORES.OHKO;
 		else if (foeView && dmg >= foeView.hpRatio * 100) score += 30;
 		else if (dmg < 15 && mv.category === 'Status') score -= 5;
@@ -393,14 +410,19 @@ function decideMove(tracker, request) {
 				// Turns-to-KO test: boosting only pays when
 				// [boost + M hits] beats [N hits at current power].
 				score = evaluateSetupTurns({
-					dmgNow: ctx.bestDmg,
+					dmgNow: blind ? 45 : ctx.bestDmg,
 					foeHpPct: foeView ? (foeView.hpRatio || 1) * 100 : 100,
 					boosts: mv.boosts,
-					bestDmg: ctx.bestDmg,
+					bestDmg: blind ? 45 : ctx.bestDmg,
 					selfHpRatio: ctx.selfHpRatio,
 				}).score;
+				if (blind) score = Math.min(score, SCORES.STATUP_SELF * 0.5);
 			} else {
-				score = scoreStatusMove(mv, ctx);
+				score = scoreStatusMove(mv, {
+					...ctx,
+					bestDmg: blind ? 45 : ctx.bestDmg,
+					canKoNow: blind ? false : ctx.canKoNow,
+				});
 			}
 			// ANY status/utility move decays on repeat (Haze x3 taught us
 			// this); setup/heal additionally hard-cap via streak.
