@@ -1,0 +1,12 @@
+{
+  "name": "ps-autobattler",
+  "version": "0.1.0",
+  "description": "Heuristic auto-battler for the Pokemon Showdown headless engine",
+  "main": "src/battle-runner.js",
+  "scripts": {
+    "test": "node test/run-tests.js",
+    "battle": "node src/battle-runner.js",
+    "benchmark": "node src/battle-runner.js --games 20 --format gen9randombattle --p2 random"
+  },
+  "license": "MIT"
+}
