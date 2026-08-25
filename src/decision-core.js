@@ -313,7 +313,7 @@ function decideMove(tracker, request) {
 	// must outweigh any damage math unless we kill through it first.
 	// ---------------------------------------------------------------------
 	const foeMon = tracker.foeActive;
-	const foeAttacker = foeView && foeSpeciesObj ? {
+	const foeAttacker = foeView && defenderSpecies ? {
 		species: foeView.species,
 		level: foeView.level,
 		types: (() => {
