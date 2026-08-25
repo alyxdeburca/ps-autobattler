@@ -78,6 +78,17 @@ function abilityFromId(idOrName) {
 	return exists(ab) ? ab : null;
 }
 
+/** Full possible movepool of a species in random battles (exact global
+ *  sets -- not a guess). Returns [] when unknown / non-random formats. */
+function randomMovesFor(idOrName) {
+	const data = init().data;
+	const id = String(idOrName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+	if (data && data.randomMoves && data.randomMoves[id]) {
+		return data.randomMoves[id];
+	}
+	return [];
+}
+
 /** Summed type effectiveness of moveType against a list of defending types.
  *  >0 super effective, 0 neutral, <0 resisted. */
 function getEffectiveness(moveType, defTypes) {
@@ -103,6 +114,7 @@ module.exports = {
 	moveFromId,
 	itemFromId,
 	abilityFromId,
+	randomMovesFor,
 	getEffectiveness,
 	isImmune,
 };

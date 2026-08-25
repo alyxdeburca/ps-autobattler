@@ -263,6 +263,70 @@ function decideMove(tracker, request) {
 	const teraType = meActive.canTerastallize || '';
 	const mem = aiMem(tracker);
 
+	// ---------------------------------------------------------------------
+	// THREAT MODEL: what can the foe's REVEALED moves do to each of our mons?
+	// This is the defensive half of tempo: an OHKO hanging over our head
+	// must outweigh any damage math unless we kill through it first.
+	// ---------------------------------------------------------------------
+	const foeMon = tracker.foeActive;
+	const foeAttacker = foeView && foeSpeciesObj ? {
+		species: foeView.species,
+		level: foeView.level,
+		types: (() => {
+			const sp = dex.speciesFromId(foeView.species);
+			return sp ? sp.types : [];
+		})(),
+		status: foeView.status,
+		boosts: tracker._foeBoosts || {},
+	} : null;
+	const foeStats = defenderSpecies ?
+		est.estimateStats(defenderSpecies, foeView.level || 100) : null;
+
+	/** Worst-case incoming % vs a given one of our mons, over the foe's
+	 *  FULL possible movepool (random battles: exact global sets). */
+	function incomingThreat(mySpeciesName, myLevel) {
+		if (!foeAttacker || !foeStats) return 0;
+		const mySp = dex.speciesFromId(mySpeciesName);
+		let max = 0;
+		const pools = [
+			...((foeMon && foeMon.moves) || []),
+			...dex.randomMovesFor(foeView.species),
+		];
+		for (const mvNameOrId of pools) {
+			const mv = dex.moveFromId(
+				String(mvNameOrId).toLowerCase().replace(/[^a-z0-9]/g, ''));
+			if (!mv || mv.category === 'Status') continue;
+			const pct = est.expectedDamagePct({
+				attacker: foeAttacker,
+				defender: { types: mySp ? mySp.types : [], level: myLevel },
+				move: mv,
+				attackerStats: foeStats,
+				defenderSpecies: mySp,
+			});
+			if (pct > max) max = pct;
+		}
+		return max;
+	}
+
+	const threatNow = foeView ?
+		incomingThreat(attackerSpecies, attacker.level) : 0;
+	const foeSpeEst = foeStats ? foeStats.spe : 0;
+	const ourSpe = (activePd.stats && activePd.stats.spe) || 0;
+	const ourMaxPriority = Math.max(0, ...meActive.moves.map(md => {
+		const mv = dex.moveFromId(md.id);
+		return (mv && mv.priority) || 0;
+	}));
+	// We only "act through" the danger if we remove the foe before it moves.
+	const weActFirst = ourSpe >= foeSpeEst || ourMaxPriority > 0;
+
+	/** Death-risk tier -> score penalty. */
+	function riskPenalty(threat, killsThrough) {
+		if (threat >= 95) return killsThrough ? 0 : 90;
+		if (threat >= 70) return killsThrough ? 0 : 35;
+		if (threat >= 45) return 12;
+		return 0;
+	}
+
 	const candidates = [];
 
 	// --- moves ---------------------------------------------------------
@@ -282,14 +346,17 @@ function decideMove(tracker, request) {
 
 		if (mv.category === 'Status') {
 			score = scoreStatusMove(mv, ctx);
-			// Setup/heal loops die here: each repeat halves the score, and
-			// a long setup streak is hard-capped.
+			// ANY status/utility move decays on repeat (Haze x3 taught us
+			// this); setup/heal additionally hard-cap via streak.
 			const isSetup = /raise/.test(`${mv.shortDesc || ''}`.toLowerCase());
 			const isHeal = /heal/.test(`${mv.shortDesc || ''}`.toLowerCase());
-			if (isSetup || isHeal) {
-				score *= repetitionFactor(mem, md.id, true);
-				if (isSetup && mem.setupStreak >= 2) score = Math.min(score, 1);
-				if (score <= ctx.bestDmg) score = Math.min(score, ctx.bestDmg * 0.6);
+			score *= repetitionFactor(mem, md.id, true);
+			if (isSetup && mem.setupStreak >= 2) score = Math.min(score, 1);
+			// A repeated utility move must still beat half our best damage,
+			// otherwise it's a wasted turn by definition.
+			if ((mem.statusUse.get(md.id) || 0) >= 2 &&
+				score < ctx.bestDmg * 0.5) {
+				score = Math.min(score, 0.5);
 			}
 		}
 		if (mv.secondary && mv.secondary.status && foeView &&
@@ -298,7 +365,10 @@ function decideMove(tracker, request) {
 		}
 		if ((md.pp | 0) === 1) score += SCORES.LOW_PP;
 
-		candidates.push({ kind: 'move', slot: idx + 1, id: md.id, name: mv.name, score, dmg });
+		candidates.push({ kind: 'move', slot: idx + 1, id: md.id, name: mv.name,
+			score: score - riskPenalty(threatNow, weActFirst && foeView &&
+				dmg >= (foeView.hpRatio || 1) * 100),
+			dmg });
 
 		// --- Tera variant: worth spending only if it clearly pays --------
 		if (teraType && mv.category !== 'Status') {
@@ -313,6 +383,9 @@ function decideMove(tracker, request) {
 			else if (foeView && dmgT >= (foeView.hpRatio || 1) * 100) tScore += 30;
 			const enablesKo = dmgT >= 100 && dmg < 100;
 			if (!enablesKo && tScore <= score + SCORES.TERA_MARGIN) tScore = -1;
+			const teraKillsThrough = weActFirst && foeView &&
+				dmgT >= (foeView.hpRatio || 1) * 100;
+			tScore -= riskPenalty(threatNow, teraKillsThrough);
 			candidates.push({
 				kind: 'tera-move', slot: idx + 1, id: md.id,
 				name: `${mv.name} ✦`, score: tScore, dmg: dmgT, teraType,
@@ -345,6 +418,13 @@ function decideMove(tracker, request) {
 				};
 				let swScore = matchupScore(view, foeView) -
 					SCORES.SWITCH_IN_PENALTY + view.hpRatio * 10;
+				// Defensive matchup: how hard does the foe hit THIS incoming
+				// mon with its full possible movepool?
+				const threat = incomingThreat(d.species, d.level);
+				const hpAfterSwap = view.hpRatio * 100;
+				const diesOnSwitchIn = threat >= hpAfterSwap;
+				swScore -= riskPenalty(threat, false);
+				if (diesOnSwitchIn) swScore -= 40;
 				// Anti-dithering: flipping back to the mon we just switched
 				// away from (within the window) costs extra.
 				const recent = mem.switchHistory[mem.switchHistory.length - 1];
@@ -356,6 +436,7 @@ function decideMove(tracker, request) {
 					kind: 'switch', slot,
 					id: d.species, name: sp ? sp.name : d.species,
 					score: swScore, flippedBack: !!flippedBack,
+					threat,
 				});
 			}
 		}
@@ -382,9 +463,11 @@ function decideMove(tracker, request) {
 
 	// Update status/setup memory for repetition damping + streak caps.
 	if (best && best.kind === 'move') {
-		const isSetup = /raise/.test(`${(dex.moveFromId(best.id) || {}).shortDesc || ''}`.toLowerCase());
-		const isHeal = /heal/.test(`${(dex.moveFromId(best.id) || {}).shortDesc || ''}`.toLowerCase());
-		if (isSetup || isHeal) mem.statusUse.set(best.id, (mem.statusUse.get(best.id) || 0) + 1);
+		const bestMv = dex.moveFromId(best.id) || {};
+		if (bestMv.category === 'Status') {
+			mem.statusUse.set(best.id, (mem.statusUse.get(best.id) || 0) + 1);
+		}
+		const isSetup = /raise/.test(`${bestMv.shortDesc || ''}`.toLowerCase());
 		mem.setupStreak = isSetup ? mem.setupStreak + 1 : 0;
 	} else if (best) {
 		mem.setupStreak = 0;
