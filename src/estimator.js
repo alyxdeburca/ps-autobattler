@@ -19,6 +19,19 @@ const STATUS_MULTIPLIERS = {
 	frz: 1,
 };
 
+// Optional high-fidelity calc engine (e.g. @smogon/calc in the browser
+// extension). Signature: ({attacker, defender, move, attackerStats,
+// defenderSpecies}) -> expected damage as % of defender max HP.
+let calcEngine = null;
+
+function setCalcEngine(fn) {
+	calcEngine = typeof fn === 'function' ? fn : null;
+}
+
+function getCalcEngine() {
+	return calcEngine;
+}
+
 /** Estimate level-100 stats for a species when we can't see real ones
  *  (i.e. for foe pokemon). Uses a neutral nature + generic EV spread. */
 function estimateStats(species, level = 100) {
@@ -124,6 +137,15 @@ function estimateDamagePct({ attacker, defender, move, attackerStats, defenderSp
 
 /** Expected damage % after accuracy. Used for scoring. */
 function expectedDamagePct(opts) {
+	if (calcEngine) {
+		try {
+			const v = calcEngine(opts);
+			if (typeof v === 'number' && Number.isFinite(v)) return Math.max(0, v);
+		} catch (e) {
+			// Engine failure must never break decisions -- fall through to
+			// the internal heuristic below.
+		}
+	}
 	const raw = estimateDamagePct(opts);
 	const acc = (opts.move && opts.move.accuracy === true) ? 1 :
 		((opts.move && opts.move.accuracy) || 100) / 100;
@@ -136,5 +158,7 @@ module.exports = {
 	expectedDamagePct,
 	stabFactor,
 	typeMultiplier,
+	setCalcEngine,
+	getCalcEngine,
 	STATUS_MULTIPLIERS,
 };

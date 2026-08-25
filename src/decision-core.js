@@ -159,6 +159,7 @@ function decideMove(tracker, request) {
 		level: (trackerMod.parseDetails(`${activePd.details}`)).level,
 		types: myTypes,
 		status: trackerMod.parseCondition(activePd.condition).status,
+		item: activePd.item || '',
 	};
 	const defenderSpecies = foeView ? dex.speciesFromId(foeView.species) : null;
 
